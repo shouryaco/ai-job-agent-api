@@ -5,8 +5,6 @@ import os
 app = Flask(__name__)
 
 # Load API keys from environment or hardcode for testing
-FIRECRAWL_API_KEY = os.getenv("FIRECRAWL_API_KEY", "your_api_key")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "your_api_key")
 MODEL_ID = os.getenv("OPENAI_MODEL_ID", "o3-mini")
 
 agent = JobHuntingAgent(
