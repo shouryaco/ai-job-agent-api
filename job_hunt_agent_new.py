@@ -38,18 +38,30 @@ class JobHuntingAgent:
         )
         self.firecrawl = FirecrawlApp(api_key=firecrawl_api_key)
 
+    def build_eurojobs_url(self, country: str) -> str:
+        return (
+            "https://eurojobs.com/search-results-jobs/"
+            "?action=search"
+            "&listing_type%5Bequal%5D=Job"
+            "&keywords%5Ball_words%5D=any"
+            f"&Location%5Blocation%5D%5Bvalue%5D={country}"
+            "&Location%5Blocation%5D%5Bradius%5D=10"
+        )
+
     def find_jobs(self, job_title: str, location: str, experience_years: int, skills: List[str]) -> str:
         formatted_job_title = job_title.lower().replace(" ", "-")
         formatted_location = location.lower().replace(" ", "-")
         skills_string = ", ".join(skills)
 
         urls = []
-        if any(loc in location.lower() for loc in ["germany", "france", "norway", "sweden", "netherlands", "europe", "italy", "spain"]):
+        if "europe" in location.lower():
             urls = [
-                f"https://www.eurojobs.com/job-search/{formatted_job_title}/{formatted_location}/",
-                f"https://www.stepstone.de/en/job-search/{formatted_job_title}/{formatted_location}/",
-                f"https://jobs.euractiv.com/search?keywords={formatted_job_title}&location={formatted_location}"
+                self.build_eurojobs_url("Germany"),
+                self.build_eurojobs_url("France"),
+                self.build_eurojobs_url("Sweden")
             ]
+        elif any(loc in location.lower() for loc in ["germany", "france", "norway", "sweden", "netherlands", "italy", "spain"]):
+            urls = [self.build_eurojobs_url(location.title())]
         elif "india" in location.lower():
             urls = [
                 f"https://www.naukri.com/{formatted_job_title}-jobs-in-{formatted_location}",
@@ -70,16 +82,24 @@ class JobHuntingAgent:
             raw_response = self.firecrawl.extract(
                 urls=urls,
                 prompt=f"""
-Extract up to 10 job listings from the pages below.
-Try your best to extract:
-- region (e.g., country or city)
-- role (e.g., 'Software Developer')
-- job_title (e.g., 'Frontend Engineer')
-- experience (e.g., '2+ years', 'Entry-level')
-- job_link (direct job posting URL)
+From the pages below, extract up to 10 job listings.
 
-The user's skills are: {skills_string}
-Experience: ~{experience_years} years
+Try to extract (if available):
+- job_title: the title of the job
+- role: the functional role (e.g., 'Frontend Developer')
+- region: city, country, or general location
+- experience: required experience (e.g., '3+ years')
+- job_link: the direct URL to apply
+
+You can leave missing fields blank.
+
+Only extract real jobs, skip ads or navigation.
+
+User is looking for:
+• Title: {job_title}
+• Location: {location}
+• Experience: ~{experience_years} years
+• Skills: {skills_string}
 """,
                 schema=ExtractSchema.model_json_schema()
             )
