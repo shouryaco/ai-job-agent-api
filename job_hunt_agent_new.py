@@ -7,7 +7,6 @@ import streamlit as st
 import os
 from dotenv import load_dotenv
 
-# Load environment variables from .env file
 load_dotenv()
 
 class NestedModel1(BaseModel):
@@ -44,36 +43,51 @@ class JobHuntingAgent:
         formatted_location = location.lower().replace(" ", "-")
         skills_string = ", ".join(skills)
 
-        urls = [
-            f"https://www.linkedin.com/jobs/search/?keywords={formatted_job_title}&location={formatted_location}&geoId=101452733",
-            f"https://www.indeed.com/jobs?q={formatted_job_title}&l={formatted_location}",
-            f"https://www.eurojobs.com/job-search/{formatted_job_title}/{formatted_location}/",
-            f"https://www.stepstone.de/en/job-search/{formatted_job_title}/{formatted_location}/",
-            f"https://www.monster.lu/en/jobs/search/?q={formatted_job_title}&where={formatted_location}",
-            f"https://www.jobserve.com/gb/en/Job-Search/",
-            f"https://jobs.euractiv.com/search?keywords={formatted_job_title}&location={formatted_location}",
-            f"https://ec.europa.eu/eures/portal/jv-se/home",
-        ]
+        # Determine job board URLs based on location
+        urls = []
+        if any(loc in location.lower() for loc in ["germany", "france", "norway", "sweden", "netherlands", "europe", "italy", "spain"]):
+            urls = [
+                f"https://www.eurojobs.com/job-search/{formatted_job_title}/{formatted_location}/",
+                f"https://www.stepstone.de/en/job-search/{formatted_job_title}/{formatted_location}/",
+                f"https://jobs.euractiv.com/search?keywords={formatted_job_title}&location={formatted_location}"
+            ]
+        elif "india" in location.lower():
+            urls = [
+                f"https://www.naukri.com/{formatted_job_title}-jobs-in-{formatted_location}",
+                f"https://www.monsterindia.com/srp/results?query={formatted_job_title}&locations={formatted_location}"
+            ]
+        elif "usa" in location.lower() or "united states" in location.lower():
+            urls = [
+                f"https://www.indeed.com/jobs?q={formatted_job_title}&l={formatted_location}",
+                f"https://www.monster.com/jobs/search/?q={formatted_job_title}&where={formatted_location}"
+            ]
+        else:
+            urls = [
+                f"https://www.indeed.com/jobs?q={formatted_job_title}&l={formatted_location}",
+                f"https://www.monster.com/jobs/search/?q={formatted_job_title}&where={formatted_location}"
+            ]
 
         try:
             raw_response = self.firecrawl.extract(
                 urls=urls,
                 params={
-                    'prompt': f"""Extract job postings ONLY from European countries.
+                    'prompt': f"""
+Extract up to 10 job listings from the pages below.
+Try your best to extract:
+- region (e.g., country or city)
+- role (e.g., 'Software Developer')
+- job_title (e.g., 'Frontend Engineer')
+- experience (e.g., '2+ years', 'Entry-level')
+- job_link (direct job posting URL)
 
-Filter jobs based on:
-- Job Title: Related to {job_title}
-- Location: Europe or marked as Remote
-- Experience: Around {experience_years} years
-- Skills: Some of {skills_string}
-- Job Type: Full-time, Part-time, Contract, Temporary, Internship
-
-Return MAX 10 jobs with:
-- region, role, job_title, experience, job_link
+The user's skills are: {skills_string}
+Experience: ~{experience_years} years
 """,
                     'schema': ExtractSchema.model_json_schema()
                 }
             )
+
+            print("Raw Firecrawl Data:", raw_response)
 
             if isinstance(raw_response, dict) and raw_response.get('success'):
                 jobs = raw_response['data'].get('job_postings', [])
@@ -81,14 +95,17 @@ Return MAX 10 jobs with:
                 jobs = []
 
             if not jobs:
-                return "No European job listings found matching your criteria. Try different search parameters."
+                return {
+                    "status": "no_data",
+                    "message": "Firecrawl could not extract valid job listings. Try adjusting the prompt, job title, or check API access to the job boards.",
+                    "raw": raw_response
+                }
 
             analysis = self.agent.run(
-                f"""Analyze these European jobs:
+                f"""
+Analyze these jobs:
 
 {jobs}
-
-Return:
 
 💼 SELECTED JOB OPPORTUNITIES
 • Job Title & Role
@@ -112,9 +129,16 @@ Return:
 """
             )
 
-            return analysis.content
+            return {
+                "status": "success",
+                "jobs": jobs,
+                "analysis": analysis.content
+            }
         except Exception as e:
-            return f"An error occurred while searching for jobs: {str(e)}"
+            return {
+                "status": "error",
+                "message": str(e)
+            }
 
     def get_industry_trends(self, job_category: str) -> str:
         urls = [
@@ -126,7 +150,8 @@ Return:
             raw_response = self.firecrawl.extract(
                 urls=urls,
                 params={
-                    'prompt': f"""Extract industry trends for {job_category}:
+                    'prompt': f"""
+Extract industry trends for {job_category}:
 - industry, avg_salary, growth_rate, demand_level, top_skills
 Minimum 3 roles or sub-industries
 """,
@@ -140,7 +165,8 @@ Minimum 3 roles or sub-industries
                     return f"No industry trends available for {job_category}."
 
                 analysis = self.agent.run(
-                    f"""Analyze these trends for {job_category}:
+                    f"""
+Analyze these trends for {job_category}:
 
 {industries}
 
@@ -172,70 +198,3 @@ def create_job_agent():
             openai_api_key=st.session_state.openai_key,
             model_id=st.session_state.model_id
         )
-
-def main():
-    st.set_page_config(page_title="AI Job Hunting Assistant", page_icon="💼", layout="wide")
-    load_dotenv()
-
-    env_firecrawl_key = os.getenv("FIRECRAWL_API_KEY", "")
-    env_openai_key = os.getenv("OPENAI_API_KEY", "")
-    default_model = os.getenv("OPENAI_MODEL_ID", "o3-mini")
-
-    with st.sidebar:
-        st.title("🔑 API Configuration")
-        st.subheader("🤖 Model Selection")
-        model_id = st.selectbox("Choose OpenAI Model", ["o3-mini", "gpt-4o-mini"], index=0)
-        st.session_state.model_id = model_id
-
-        st.subheader("🔐 API Keys")
-        firecrawl_key = st.text_input("Firecrawl API Key", type="password", value="" if env_firecrawl_key else "")
-        openai_key = st.text_input("OpenAI API Key", type="password", value="" if env_openai_key else "")
-
-        firecrawl_key = firecrawl_key or env_firecrawl_key
-        openai_key = openai_key or env_openai_key
-
-        if firecrawl_key and openai_key:
-            st.session_state.firecrawl_key = firecrawl_key
-            st.session_state.openai_key = openai_key
-            create_job_agent()
-        else:
-            st.warning("⚠️ Missing API keys")
-
-    st.title("💼 AI Job Hunting Assistant")
-    st.info("Enter your job search criteria below to get job recommendations and industry insights.")
-
-    col1, col2 = st.columns(2)
-    with col1:
-        job_title = st.text_input("Job Title", placeholder="e.g., Software Engineer")
-        location = st.text_input("Location", placeholder="e.g., Germany, Remote")
-    with col2:
-        experience_years = st.number_input("Experience (in years)", min_value=0, max_value=30, value=2)
-        skills_input = st.text_area("Skills (comma separated)", placeholder="e.g., Python, SQL")
-        skills = [s.strip() for s in skills_input.split(",")] if skills_input else []
-
-    job_category = st.selectbox("Industry/Job Category", [
-        "Information Technology", "Software Development", "Data Science", "Marketing",
-        "Finance", "Healthcare", "Education", "Engineering", "Sales", "Human Resources"
-    ])
-
-    if st.button("🔍 Start Job Search", use_container_width=True):
-        if 'job_agent' not in st.session_state:
-            st.error("⚠️ Please enter your API keys in the sidebar first!")
-            return
-        if not job_title or not location:
-            st.error("⚠️ Please enter both job title and location!")
-            return
-
-        with st.spinner("🔍 Searching for jobs..."):
-            result = st.session_state.job_agent.find_jobs(job_title, location, experience_years, skills)
-            st.success("✅ Job search complete!")
-            st.markdown(result)
-
-            with st.spinner("📊 Analyzing industry trends..."):
-                trends = st.session_state.job_agent.get_industry_trends(job_category)
-                st.success("✅ Industry analysis complete!")
-                with st.expander("📈 Industry Trends"):
-                    st.markdown(trends)
-
-if __name__ == "__main__":
-    main()
