@@ -3,7 +3,6 @@ from pydantic import BaseModel, Field
 from agno.agent import Agent
 from agno.models.openai import OpenAIChat
 from firecrawl import FirecrawlApp
-from urllib.parse import quote_plus
 import json
 
 class NestedModel1(BaseModel):
@@ -25,58 +24,63 @@ class JobHuntingAgent:
         )
         self.firecrawl = FirecrawlApp(api_key=firecrawl_api_key)
 
-    def find_jobs(self, job_title: str, location: str, experience_years: int, skills: List[str]) -> Dict:
-        formatted_job_title = quote_plus(job_title)
-        skills_string = ", ".join(skills)
-        location_lower = location.lower()
-
-        # Countries for 'Europe'
-        EUROPEAN_COUNTRIES = [
-            "Germany", "France", "Italy", "Norway", "Sweden", "Netherlands", "Denmark",
-            "Finland", "Austria", "Belgium", "Switzerland", "Poland", "Spain", "Portugal",
-            "Czech Republic", "Hungary", "Greece", "Ireland", "Romania", "Croatia"
-        ]
+    def generate_urls(self, job_title: str, location: str) -> List[str]:
+        formatted_job_title = job_title.lower().replace(" ", "+")
+        formatted_location = location.lower().replace(" ", "-")
 
         urls = []
 
-        scandinavian_countries = ["sweden", "norway", "denmark", "finland", "iceland"]
         european_countries = [
-            "germany", "france", "italy", "spain", "portugal",
-            "netherlands", "belgium", "sweden", "norway", "denmark"
+            "germany", "france", "italy", "norway", "netherlands", "sweden", "denmark", "finland", "iceland", "switzerland", "austria", "belgium", "ireland", "spain", "portugal"
         ]
+        scandinavian_countries = ["norway", "sweden", "denmark", "finland", "iceland"]
 
-        if location.lower() == "scandinavia":
-            for country in scandinavian_countries[:10]:
-                urls.append(
-                    f"https://eurojobs.com/search-results-jobs/?action=search&listing_type%5Bequal%5D=Job&keywords%5Ball_words%5D={formatted_job_title}&Location%5Blocation%5D%5Bvalue%5D={country}&Location%5Blocation%5D%5Bradius%5D=10"
-                )
+        # Determine which countries to use
+        if location.lower() == "europe":
+            countries = european_countries
+        elif location.lower() == "scandinavia":
+            countries = scandinavian_countries
+        else:
+            countries = [location.lower()]
 
-        if location_lower == "europe":
-            for country in european_countries[:10]:
-                urls.append(
-                    f"https://eurojobs.com/search-results-jobs/?action=search&listing_type%5Bequal%5D=Job&keywords%5Ball_words%5D={formatted_job_title}&Location%5Blocation%5D%5Bvalue%5D={country}&Location%5Blocation%5D%5Bradius%5D=10"
-                )
-        elif location.lower() in scandinavian_countries + european_countries:
-            urls.append(
-                f"https://eurojobs.com/search-results-jobs/?action=search&listing_type%5Bequal%5D=Job&keywords%5Ball_words%5D={formatted_job_title}&Location%5Blocation%5D%5Bvalue%5D={formatted_location}&Location%5Blocation%5D%5Bradius%5D=10"
-            )
-        elif location.lower() in ["usa", "united states"]:
-            urls.append(f"https://www.indeed.com/jobs?q={formatted_job_title}&l={formatted_location}")
-        elif location.lower() in ["india"]:
-            urls.append(f"https://www.naukri.com/{formatted_job_title}-jobs-in-{formatted_location}")
+        # Build up to 10 URLs
+        for country in countries:
+            url = f"https://eurojobs.com/search-results-jobs/?action=search&listing_type%5Bequal%5D=Job&keywords%5Ball_words%5D={formatted_job_title}&Location%5Blocation%5D%5Bvalue%5D={country}&Location%5Blocation%5D%5Bradius%5D=25"
+            urls.append(url)
+            if len(urls) >= 10:
+                break  # Firecrawl beta limit
+
+        return urls
+
+    def find_jobs(self, job_title: str, location: str, experience_years: int, skills: List[str]) -> Dict:
+        formatted_job_title = job_title.lower().replace(" ", "-")
+        formatted_location = location.lower().replace(" ", "-")
+        skills_string = ", ".join(skills)
+
+        urls = self.generate_urls(job_title, location)
+
+        if not urls:
+            return {
+                "result": {
+                    "message": f"No URLs could be constructed for the location: {location}",
+                    "raw": {},
+                    "status": "error"
+                }
+            }
 
         try:
             raw_response = self.firecrawl.extract(
                 urls=urls,
                 prompt=f"""
-Extract job postings related to {job_title} roles in {location}. Include remote roles if available.
+Extract job postings related to "{job_title}" roles in or near "{location}". Include remote roles if relevant. 
 Return a list with:
 - region
 - role
 - job_title
 - experience
 - job_link
-Max 10 items per source. Skip duplicates. Match results to user's input: {experience_years} years experience, skills: {skills_string}.
+
+Max 10 items. Skip duplicates. Keep results relevant to user's experience and skills.
 """,
                 schema=ExtractSchema.model_json_schema()
             )
@@ -87,14 +91,13 @@ Max 10 items per source. Skip duplicates. Match results to user's input: {experi
             if not job_data:
                 return {
                     "result": {
-                        "message": "❌ No jobs extracted. Try adjusting job title or location.",
+                        "message": "❌ No job postings found. Try changing the job title or country.",
                         "raw": json_data,
                         "status": "no_data"
                     }
                 }
 
-            # Prompt GPT for analysis
-            analysis_prompt = f"""
+            filtering_instructions = f"""
 {job_data}
 
 As a career expert, analyze these jobs:
@@ -105,16 +108,15 @@ As a career expert, analyze these jobs:
   - Location near '{location}'
   - Experience around {experience_years} years
   - Skills: {skills_string}
-• Even if some experience or skills are missing, include roles with clear title and region matches.
-• Select top 15–20 matches and format output like:
-  1. Job Title - Role - Region - [Job Link]
+• If experience or skills are missing, still include jobs if title and location match.
+• Select 15–20 best matches.
 
 2. SKILLS MATCH ANALYSIS
 3. RECOMMENDATIONS
 4. APPLICATION TIPS
 """
 
-            analysis = self.agent.run(analysis_prompt)
+            analysis = self.agent.run(filtering_instructions)
 
             return {
                 "result": {
