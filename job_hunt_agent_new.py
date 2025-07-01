@@ -7,153 +7,127 @@ import streamlit as st
 import os
 from dotenv import load_dotenv
 
+# Load environment variables from .env file if it exists
 load_dotenv()
 
 class NestedModel1(BaseModel):
-    region: str = Field(description="Region or area where the job is located", default=None)
-    role: str = Field(description="Specific role or function within the job category", default=None)
-    job_title: str = Field(description="Title of the job position", default=None)
-    experience: str = Field(description="Experience required for the position", default=None)
-    job_link: str = Field(description="Link to the job posting", default=None)
+    region: str = Field(default=None)
+    role: str = Field(default=None)
+    job_title: str = Field(default=None)
+    experience: str = Field(default=None)
+    job_link: str = Field(default=None)
 
 class ExtractSchema(BaseModel):
-    job_postings: List[NestedModel1] = Field(description="List of job postings")
+    job_postings: List[NestedModel1]
 
 class IndustryTrend(BaseModel):
-    industry: str = Field(description="Industry name", default=None)
-    avg_salary: float = Field(description="Average salary in the industry", default=None)
-    growth_rate: float = Field(description="Growth rate of the industry", default=None)
-    demand_level: str = Field(description="Demand level in the industry", default=None)
-    top_skills: List[str] = Field(description="Top skills in demand for this industry", default=None)
+    industry: str = Field(default=None)
+    avg_salary: float = Field(default=None)
+    growth_rate: float = Field(default=None)
+    demand_level: str = Field(default=None)
+    top_skills: List[str] = Field(default=None)
 
 class IndustryTrendsSchema(BaseModel):
-    industry_trends: List[IndustryTrend] = Field(description="List of industry trends")
+    industry_trends: List[IndustryTrend]
 
 class JobHuntingAgent:
     def __init__(self, firecrawl_api_key: str, openai_api_key: str, model_id: str = "o3-mini"):
         self.agent = Agent(
             model=OpenAIChat(id=model_id, api_key=openai_api_key),
             markdown=True,
-            description="I am a career expert who helps find and analyze job opportunities based on user preferences."
+            description="Career expert helping users find job opportunities."
         )
         self.firecrawl = FirecrawlApp(api_key=firecrawl_api_key)
-
-    def build_eurojobs_url(self, country: str) -> str:
-        return (
-            "https://eurojobs.com/search-results-jobs/"
-            "?action=search"
-            "&listing_type%5Bequal%5D=Job"
-            "&keywords%5Ball_words%5D=any"
-            f"&Location%5Blocation%5D%5Bvalue%5D={country}"
-            "&Location%5Blocation%5D%5Bradius%5D=10"
-        )
 
     def find_jobs(self, job_title: str, location: str, experience_years: int, skills: List[str]) -> str:
         formatted_job_title = job_title.lower().replace(" ", "-")
         formatted_location = location.lower().replace(" ", "-")
         skills_string = ", ".join(skills)
 
-        urls = []
-        if "europe" in location.lower():
-            urls = [
-                self.build_eurojobs_url("Germany"),
-                self.build_eurojobs_url("France"),
-                self.build_eurojobs_url("Sweden")
-            ]
-        elif any(loc in location.lower() for loc in ["germany", "france", "norway", "sweden", "netherlands", "italy", "spain"]):
-            urls = [self.build_eurojobs_url(location.title())]
-        elif "india" in location.lower():
-            urls = [
-                f"https://www.naukri.com/{formatted_job_title}-jobs-in-{formatted_location}",
-                f"https://www.monsterindia.com/srp/results?query={formatted_job_title}&locations={formatted_location}"
-            ]
-        elif "usa" in location.lower() or "united states" in location.lower():
-            urls = [
-                f"https://www.indeed.com/jobs?q={formatted_job_title}&l={formatted_location}",
-                f"https://www.monster.com/jobs/search/?q={formatted_job_title}&where={formatted_location}"
-            ]
-        else:
-            urls = [
-                f"https://www.indeed.com/jobs?q={formatted_job_title}&l={formatted_location}",
-                f"https://www.monster.com/jobs/search/?q={formatted_job_title}&where={formatted_location}"
-            ]
+        urls = [
+            f"https://www.naukri.com/{formatted_job_title}-jobs-in-{formatted_location}",
+            f"https://www.indeed.com/jobs?q={formatted_job_title}&l={formatted_location}",
+            f"https://www.monster.com/jobs/search/?q={formatted_job_title}&where={formatted_location}",
+            f"https://eurojobs.com/search-results-jobs/?action=search&listing_type%5Bequal%5D=Job&keywords%5Ball_words%5D={formatted_job_title or 'any'}&Location%5Blocation%5D%5Bvalue%5D={location}"
+        ]
 
         try:
             raw_response = self.firecrawl.extract(
                 urls=urls,
                 prompt=f"""
-From the pages below, extract up to 10 job listings.
+                Extract up to 10 job postings from these job boards, prioritizing matches for:
 
-Try to extract (if available):
-- job_title: the title of the job
-- role: the functional role (e.g., 'Frontend Developer')
-- region: city, country, or general location
-- experience: required experience (e.g., '3+ years')
-- job_link: the direct URL to apply
+                - Job Title: Related to '{job_title}'
+                - Location: {location} (Europe-focused)
+                - Skills: At least one of: {skills_string}
+                - Experience: Around {experience_years} years (optional)
 
-You can leave missing fields blank.
+                For each job, extract as much of this as available:
+                - region
+                - role
+                - job_title
+                - experience
+                - job_link
 
-Only extract real jobs, skip ads or navigation.
-
-User is looking for:
-• Title: {job_title}
-• Location: {location}
-• Experience: ~{experience_years} years
-• Skills: {skills_string}
-""",
+                If experience or skills are not listed, leave them blank — do not skip those jobs.
+                """,
                 schema=ExtractSchema.model_json_schema()
             )
 
-            if isinstance(raw_response, dict) and raw_response.get('success'):
-                jobs = raw_response['data'].get('job_postings', [])
+            if isinstance(raw_response, dict):
+                jobs = raw_response.get("data", {}).get("job_postings", [])
             else:
-                jobs = []
+                jobs = raw_response.data.get("job_postings", [])
 
             if not jobs:
-                return {
-                    "status": "no_data",
-                    "message": "Firecrawl could not extract valid job listings. Try adjusting the prompt, job title, or check API access to the job boards.",
-                    "raw": raw_response.dict() if hasattr(raw_response, 'dict') else str(raw_response)
-                }
+                return "No job listings found matching your criteria. Try adjusting your search parameters."
 
-            analysis = self.agent.run(
-                f"""
-Analyze these jobs:
+            strict_mode = job_title.lower() != "any" and skills and experience_years > 0
 
+            filtering_instructions = f"""
+1. STRICTLY analyze jobs that satisfy:
+   - Job Title: Must closely match '{job_title}'
+   - Location: Must be in or near '{location}'
+   - Experience: Must be around {experience_years} years
+   - Skills: Must include one or more of: {skills_string}
+2. DO NOT include jobs missing experience or skills
+3. Select 5-6 jobs that best match
+            """ if strict_mode else f"""
+1. Analyze jobs that roughly match:
+   - Job Title: Similar to '{job_title}'
+   - Location: Near '{location}'
+   - Experience: Preferably around {experience_years} years
+   - Skills: Preferably one of: {skills_string}
+2. Include incomplete jobs if others are missing
+3. Select up to 6 jobs that best match
+            """
+
+            analysis_prompt = f"""
+As a career expert, analyze these job opportunities:
+
+Jobs Found (JSON):
 {jobs}
 
+{filtering_instructions}
+
 💼 SELECTED JOB OPPORTUNITIES
-• Job Title & Role
-• Location
-• Experience
-• Pros and Cons
-• Job Link
+- Job Title, Role, Region, Experience, Link
 
 🔍 SKILLS MATCH ANALYSIS
-• Skills vs Requirements
-• Experience Match
-• Growth potential
+- Match with user skills and experience
 
 💡 RECOMMENDATIONS
-• Top 3 Jobs
-• Why they stand out
+- Top 3 jobs with reason
 
 📝 APPLICATION TIPS
-• Resume suggestions
-• Application strategy
-"""
-            )
+- Tips per job type
+            """
 
-            return {
-                "status": "success",
-                "jobs": jobs,
-                "analysis": analysis.content
-            }
+            analysis = self.agent.run(analysis_prompt)
+            return analysis.content
+
         except Exception as e:
-            return {
-                "status": "error",
-                "message": str(e)
-            }
+            return f"An error occurred while searching for jobs: {str(e)}"
 
     def get_industry_trends(self, job_category: str) -> str:
         urls = [
@@ -165,44 +139,49 @@ Analyze these jobs:
             raw_response = self.firecrawl.extract(
                 urls=urls,
                 prompt=f"""
-Extract industry trends for {job_category}:
-- industry, avg_salary, growth_rate, demand_level, top_skills
-Minimum 3 roles or sub-industries
-""",
+                Extract industry trends for the category '{job_category}'.
+                For each trend, provide:
+                - industry
+                - avg_salary
+                - growth_rate
+                - demand_level
+                - top_skills
+
+                Provide 3-5 insights across sub-domains if available.
+                """,
                 schema=IndustryTrendsSchema.model_json_schema()
             )
 
-            if isinstance(raw_response, dict) and raw_response.get('success'):
-                industries = raw_response['data'].get('industry_trends', [])
-                if not industries:
-                    return f"No industry trends available for {job_category}."
+            if isinstance(raw_response, dict):
+                trends = raw_response.get("data", {}).get("industry_trends", [])
+            else:
+                trends = raw_response.data.get("industry_trends", [])
 
-                analysis = self.agent.run(
-                    f"""
-Analyze these trends for {job_category}:
+            if not trends:
+                return f"No industry trends found for {job_category}."
 
-{industries}
+            analysis = self.agent.run(f"""
+Analyze these industry trends:
+
+{trends}
 
 📊 INDUSTRY TRENDS SUMMARY
-• Salary and demand overview
+- Bullet summary of salary and demand
 
 🔥 TOP SKILLS IN DEMAND
-• Skills list
+- Bullet list
 
 📈 CAREER GROWTH OPPORTUNITIES
-• High growth roles
-• Emerging skills
+- Fast-growing subfields
 
 🎯 RECOMMENDATIONS FOR JOB SEEKERS
-• Strategy and advice
-"""
-                )
+- Strategic tips
+            """)
 
-                return analysis.content
+            return analysis.content
 
-            return f"No industry trends data available for {job_category}."
         except Exception as e:
-            return f"An error occurred while fetching industry trends: {str(e)}"
+            return f"An error occurred while fetching trends: {str(e)}"
 
 def create_job_agent():
     if 'job_agent' not in st.session_state:
