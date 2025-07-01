@@ -39,27 +39,31 @@ class JobHuntingAgent:
 
         urls = []
 
-        if location_lower == "europe":
-            for country in EUROPEAN_COUNTRIES:
-                formatted_country = quote_plus(country)
+        scandinavian_countries = ["sweden", "norway", "denmark", "finland", "iceland"]
+        european_countries = [
+            "germany", "france", "italy", "spain", "portugal",
+            "netherlands", "belgium", "sweden", "norway", "denmark"
+        ]
+
+        if location.lower() == "scandinavia":
+            for country in scandinavian_countries[:10]:
                 urls.append(
-                    f"https://eurojobs.com/search-results-jobs/?action=search&listing_type%5Bequal%5D=Job"
-                    f"&keywords%5Ball_words%5D={formatted_job_title}"
-                    f"&Location%5Blocation%5D%5Bvalue%5D={formatted_country}"
-                    f"&Location%5Blocation%5D%5Bradius%5D=10"
+                    f"https://eurojobs.com/search-results-jobs/?action=search&listing_type%5Bequal%5D=Job&keywords%5Ball_words%5D={formatted_job_title}&Location%5Blocation%5D%5Bvalue%5D={country}&Location%5Blocation%5D%5Bradius%5D=10"
                 )
-        elif location_lower in [c.lower() for c in EUROPEAN_COUNTRIES]:
-            formatted_location = quote_plus(location)
+
+        if location_lower == "europe":
+            for country in european_countries[:10]:
+                urls.append(
+                    f"https://eurojobs.com/search-results-jobs/?action=search&listing_type%5Bequal%5D=Job&keywords%5Ball_words%5D={formatted_job_title}&Location%5Blocation%5D%5Bvalue%5D={country}&Location%5Blocation%5D%5Bradius%5D=10"
+                )
+        elif location.lower() in scandinavian_countries + european_countries:
             urls.append(
-                f"https://eurojobs.com/search-results-jobs/?action=search&listing_type%5Bequal%5D=Job"
-                f"&keywords%5Ball_words%5D={formatted_job_title}"
-                f"&Location%5Blocation%5D%5Bvalue%5D={formatted_location}"
-                f"&Location%5Blocation%5D%5Bradius%5D=10"
+                f"https://eurojobs.com/search-results-jobs/?action=search&listing_type%5Bequal%5D=Job&keywords%5Ball_words%5D={formatted_job_title}&Location%5Blocation%5D%5Bvalue%5D={formatted_location}&Location%5Blocation%5D%5Bradius%5D=10"
             )
-        elif location_lower in ["usa", "united states"]:
-            urls.append(f"https://www.indeed.com/jobs?q={formatted_job_title}&l={quote_plus(location)}")
-        elif location_lower == "india":
-            urls.append(f"https://www.naukri.com/{formatted_job_title}-jobs-in-{quote_plus(location)}")
+        elif location.lower() in ["usa", "united states"]:
+            urls.append(f"https://www.indeed.com/jobs?q={formatted_job_title}&l={formatted_location}")
+        elif location.lower() in ["india"]:
+            urls.append(f"https://www.naukri.com/{formatted_job_title}-jobs-in-{formatted_location}")
 
         try:
             raw_response = self.firecrawl.extract(
