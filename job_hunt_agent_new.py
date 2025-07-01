@@ -43,7 +43,6 @@ class JobHuntingAgent:
         formatted_location = location.lower().replace(" ", "-")
         skills_string = ", ".join(skills)
 
-        # Determine job board URLs based on location
         urls = []
         if any(loc in location.lower() for loc in ["germany", "france", "norway", "sweden", "netherlands", "europe", "italy", "spain"]):
             urls = [
@@ -70,8 +69,7 @@ class JobHuntingAgent:
         try:
             raw_response = self.firecrawl.extract(
                 urls=urls,
-                params={
-                    'prompt': f"""
+                prompt=f"""
 Extract up to 10 job listings from the pages below.
 Try your best to extract:
 - region (e.g., country or city)
@@ -83,11 +81,8 @@ Try your best to extract:
 The user's skills are: {skills_string}
 Experience: ~{experience_years} years
 """,
-                    'schema': ExtractSchema.model_json_schema()
-                }
+                schema=ExtractSchema.model_json_schema()
             )
-
-            print("Raw Firecrawl Data:", raw_response)
 
             if isinstance(raw_response, dict) and raw_response.get('success'):
                 jobs = raw_response['data'].get('job_postings', [])
@@ -149,14 +144,12 @@ Analyze these jobs:
         try:
             raw_response = self.firecrawl.extract(
                 urls=urls,
-                params={
-                    'prompt': f"""
+                prompt=f"""
 Extract industry trends for {job_category}:
 - industry, avg_salary, growth_rate, demand_level, top_skills
 Minimum 3 roles or sub-industries
 """,
-                    'schema': IndustryTrendsSchema.model_json_schema(),
-                }
+                schema=IndustryTrendsSchema.model_json_schema()
             )
 
             if isinstance(raw_response, dict) and raw_response.get('success'):
