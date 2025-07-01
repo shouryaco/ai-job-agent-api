@@ -3,6 +3,7 @@ from pydantic import BaseModel, Field
 from agno.agent import Agent
 from agno.models.openai import OpenAIChat
 from firecrawl import FirecrawlApp
+from urllib.parse import quote_plus
 import json
 
 class NestedModel1(BaseModel):
@@ -25,79 +26,91 @@ class JobHuntingAgent:
         self.firecrawl = FirecrawlApp(api_key=firecrawl_api_key)
 
     def find_jobs(self, job_title: str, location: str, experience_years: int, skills: List[str]) -> Dict:
-        formatted_job_title = job_title.lower().replace(" ", "-")
-        formatted_location = location.lower().replace(" ", "-")
+        formatted_job_title = quote_plus(job_title)
         skills_string = ", ".join(skills)
+        location_lower = location.lower()
+
+        # Countries for 'Europe'
+        EUROPEAN_COUNTRIES = [
+            "Germany", "France", "Italy", "Norway", "Sweden", "Netherlands", "Denmark",
+            "Finland", "Austria", "Belgium", "Switzerland", "Poland", "Spain", "Portugal",
+            "Czech Republic", "Hungary", "Greece", "Ireland", "Romania", "Croatia"
+        ]
 
         urls = []
 
-        # More specific EuroJobs search with keywords included
-        if location.lower() in ["germany", "france", "italy", "norway", "europe", "netherlands"]:
+        if location_lower == "europe":
+            for country in EUROPEAN_COUNTRIES:
+                formatted_country = quote_plus(country)
+                urls.append(
+                    f"https://eurojobs.com/search-results-jobs/?action=search&listing_type%5Bequal%5D=Job"
+                    f"&keywords%5Ball_words%5D={formatted_job_title}"
+                    f"&Location%5Blocation%5D%5Bvalue%5D={formatted_country}"
+                    f"&Location%5Blocation%5D%5Bradius%5D=10"
+                )
+        elif location_lower in [c.lower() for c in EUROPEAN_COUNTRIES]:
+            formatted_location = quote_plus(location)
             urls.append(
-                f"https://eurojobs.com/search-results-jobs/?action=search"
-                f"&listing_type%5Bequal%5D=Job"
-                f"&keywords%5Ball_words%5D={job_title.replace(' ', '+')}"
-                f"&Location%5Blocation%5D%5Bvalue%5D={location}"
-                f"&Location%5Blocation%5D%5Bradius%5D=25"
+                f"https://eurojobs.com/search-results-jobs/?action=search&listing_type%5Bequal%5D=Job"
+                f"&keywords%5Ball_words%5D={formatted_job_title}"
+                f"&Location%5Blocation%5D%5Bvalue%5D={formatted_location}"
+                f"&Location%5Blocation%5D%5Bradius%5D=10"
             )
-        if location.lower() in ["usa", "united states"]:
-            urls.append(f"https://www.indeed.com/jobs?q={formatted_job_title}&l={formatted_location}")
-        if location.lower() in ["india"]:
-            urls.append(f"https://www.naukri.com/{formatted_job_title}-jobs-in-{formatted_location}")
+        elif location_lower in ["usa", "united states"]:
+            urls.append(f"https://www.indeed.com/jobs?q={formatted_job_title}&l={quote_plus(location)}")
+        elif location_lower == "india":
+            urls.append(f"https://www.naukri.com/{formatted_job_title}-jobs-in-{quote_plus(location)}")
 
         try:
-            # Firecrawl Extraction
             raw_response = self.firecrawl.extract(
                 urls=urls,
                 prompt=f"""
-You are a job extraction agent. Extract job listings from the page and return a list of up to 10 job postings.
-
-Each job should include:
-- job_title
-- role
+Extract job postings related to {job_title} roles in {location}. Include remote roles if available.
+Return a list with:
 - region
-- experience (if visible)
+- role
+- job_title
+- experience
 - job_link
-
-Filter for jobs related to: "{job_title}" in "{location}" with around {experience_years} years of experience.
-Include remote jobs. If experience or skills are not listed, still include the job.
-
-Skip duplicates. Return in structured JSON format.
+Max 10 items per source. Skip duplicates. Match results to user's input: {experience_years} years experience, skills: {skills_string}.
 """,
                 schema=ExtractSchema.model_json_schema()
             )
 
-            # Convert to JSON-safe dict
             json_data = raw_response.model_dump() if hasattr(raw_response, "model_dump") else json.loads(raw_response)
-
             job_data = json_data.get("data", {}).get("job_postings", [])
 
             if not job_data:
                 return {
                     "result": {
-                        "message": "Firecrawl could not extract valid job listings. Try adjusting the prompt, job title, or check API access to the job boards.",
+                        "message": "❌ No jobs extracted. Try adjusting job title or location.",
                         "raw": json_data,
                         "status": "no_data"
                     }
                 }
 
-            # Relaxed filtering: no skills/title strict matching — just analysis
-            filtering_instructions = f"""
+            # Prompt GPT for analysis
+            analysis_prompt = f"""
 {job_data}
 
-You are a career job analyst.
+As a career expert, analyze these jobs:
 
-1. **Selected Job Opportunities**
-- Show 10–15 jobs related to "{job_title}" in "{location}"
-- Include jobs with or without experience or skills
-- Prioritize job title or role similarity if present
+1. SELECTED JOB OPPORTUNITIES
+• Prioritize jobs with:
+  - Title similar to '{job_title}'
+  - Location near '{location}'
+  - Experience around {experience_years} years
+  - Skills: {skills_string}
+• Even if some experience or skills are missing, include roles with clear title and region matches.
+• Select top 15–20 matches and format output like:
+  1. Job Title - Role - Region - [Job Link]
 
-2. **Summary**
-3. **Recommendations**
-4. **Tips**
+2. SKILLS MATCH ANALYSIS
+3. RECOMMENDATIONS
+4. APPLICATION TIPS
 """
 
-            analysis = self.agent.run(filtering_instructions)
+            analysis = self.agent.run(analysis_prompt)
 
             return {
                 "result": {
@@ -110,7 +123,7 @@ You are a career job analyst.
         except Exception as e:
             return {
                 "result": {
-                    "message": f"An error occurred while searching for jobs: {str(e)}",
+                    "message": f"❌ Error occurred during job search: {str(e)}",
                     "raw": {},
                     "status": "error"
                 }
