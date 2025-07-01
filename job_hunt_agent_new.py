@@ -93,7 +93,7 @@ Experience: ~{experience_years} years
                 return {
                     "status": "no_data",
                     "message": "Firecrawl could not extract valid job listings. Try adjusting the prompt, job title, or check API access to the job boards.",
-                    "raw": raw_response
+                    "raw": raw_response.dict() if hasattr(raw_response, 'dict') else str(raw_response)
                 }
 
             analysis = self.agent.run(
