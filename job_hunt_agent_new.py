@@ -4,6 +4,7 @@ from agno.agent import Agent
 from agno.models.openai import OpenAIChat
 from firecrawl import FirecrawlApp
 import json
+import urllib.parse
 
 class NestedModel1(BaseModel):
     region: str = Field(description="Region or area where the job is located", default=None)
@@ -25,63 +26,82 @@ class JobHuntingAgent:
         self.firecrawl = FirecrawlApp(api_key=firecrawl_api_key)
 
     def find_jobs(self, job_title: str, location: str, experience_years: int, skills: List[str]) -> Dict:
-        formatted_job_title = job_title.lower().replace(" ", "-")
-        formatted_location = location.lower().replace(" ", "-")
+        formatted_job_title = urllib.parse.quote_plus(job_title.lower().strip())
+        formatted_location = urllib.parse.quote_plus(location.lower().strip())
         skills_string = ", ".join(skills)
 
         urls = []
 
-        if location.lower() in ["germany", "france", "italy", "norway", "europe", "netherlands"]:
-            urls.append(f"https://eurojobs.com/search-results-jobs/?action=search&listing_type%5Bequal%5D=Job&keywords%5Ball_words%5D=any&Location%5Blocation%5D%5Bvalue%5D={location}&Location%5Blocation%5D%5Bradius%5D=10")
+        # EuroJobs: For Europe
+        if location.lower() in ["germany", "france", "italy", "norway", "europe", "netherlands", "spain"]:
+            urls.append(
+                f"https://eurojobs.com/search-results-jobs/?action=search&listing_type%5Bequal%5D=Job"
+                f"&keywords%5Ball_words%5D={formatted_job_title}"
+                f"&Location%5Blocation%5D%5Bvalue%5D={formatted_location}"
+                f"&Location%5Blocation%5D%5Bradius%5D=25"
+            )
+
+        # Indeed: USA
         if location.lower() in ["usa", "united states"]:
             urls.append(f"https://www.indeed.com/jobs?q={formatted_job_title}&l={formatted_location}")
+
+        # Naukri: India
         if location.lower() in ["india"]:
             urls.append(f"https://www.naukri.com/{formatted_job_title}-jobs-in-{formatted_location}")
 
+        if not urls:
+            return {
+                "result": {
+                    "message": "⚠️ Could not determine job source for this location.",
+                    "raw": {},
+                    "status": "error"
+                }
+            }
+
         try:
-            raw_response = self.firecrawl.extract(
-                urls=urls,
-                prompt=f"""
-Extract job postings related to {job_title} roles in {location}. Include remote roles. 
-Return a list with:
+            # 🔥 Firecrawl extract
+            prompt = f"""
+Extract job postings for '{job_title}' roles in '{location}' with preference for remote options.
+Return a list of:
 - region
 - role
 - job_title
 - experience
 - job_link
-Max 10 items. Skip duplicates. Keep results relevant to user's experience and skills.
-""",
+Only extract up to 15–20 relevant job entries.
+"""
+
+            raw_response = self.firecrawl.extract(
+                urls=urls,
+                prompt=prompt.strip(),
                 schema=ExtractSchema.model_json_schema()
             )
 
+            # ✅ Pydantic-based serialization
             json_data = raw_response.model_dump() if hasattr(raw_response, "model_dump") else json.loads(raw_response)
-
             job_data = json_data.get("data", {}).get("job_postings", [])
 
             if not job_data:
                 return {
                     "result": {
-                        "message": "Firecrawl could not extract valid job listings. Try adjusting the prompt, job title, or check API access to the job boards.",
+                        "message": "❌ Firecrawl could not extract valid job listings. Try adjusting the job title, location, or experience.",
                         "raw": json_data,
                         "status": "no_data"
                     }
                 }
 
-            # Always include jobs that partially match, but prioritize strict matches if job_title is not 'any'
+            # 🎯 AI-based Filtering & Suggestions
             filtering_instructions = f"""
 {job_data}
 
-As a career expert, analyze these jobs:
+Analyze and select jobs that match:
+- Title similar to: "{job_title}"
+- Located in or near: "{location}"
+- Experience: around {experience_years} year(s)
+- Skills: {skills_string if skills else 'No skills provided'}
 
-1. SELECTED JOB OPPORTUNITIES
-• Prioritize jobs with:
-  - Title similar to '{job_title}'
-  - Location near '{location}'
-  - Experience around {experience_years} years
-  - Skills: {skills_string}
-• If experience or skills are missing, still include jobs if title and location match.
-• Select 15–20 best matches.
-
+Steps:
+1. SELECTED JOB OPPORTUNITIES (Top 15–20 matches)
 2. SKILLS MATCH ANALYSIS
 3. RECOMMENDATIONS
 4. APPLICATION TIPS
